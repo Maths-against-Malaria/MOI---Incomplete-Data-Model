@@ -2,15 +2,10 @@
 # Objective    : Estimate lineage frequencies, MOI,
 # Created by   : Meraj Hashemi, Kristan A. Schneider
 # Created on   : 25.04.22
-# Last modified: 07.03.23
+# Last modified: 16.05.23
 
 
-library('ggplot2')
-library('stringr')
-
-################################# This function imports data #################################
-
-DatImp<-function(path){
+DatImp <- function(path){
   if(substring(path,nchar(path)-3,nchar(path))==".xls"){
     dat <- openxlsx::read.xlsx(path,1)
   }
@@ -30,9 +25,11 @@ DatImp<-function(path){
     }  
   }
   dat
-}     
+}  
 
-################################ This function calculate Nk #################################
+#************************************************************************************
+#This function calculate Nk
+#************************************************************************************    
 
 Nk <- function(dat){
   for(k in 1:nrow(dat)){
@@ -54,14 +51,157 @@ Nk <- function(dat){
 #------------------------- Functions for calculating the MLEs---------------------------
 ########################################################################################
 
+#' Funktion to derive MLE for the IDM or OM
+#'
+#' @param N integer-valued float; Sample size
+#' @param n_0 integer-valued float; number of empty records
+#' @param N_k float vector integer valued;each component corresponds to the number of
+#'   times a lineage is found in the dataset
+#' @param lambda_initial float; initial value of lambda for numerical algorithm, it should only be adjusted if there is prior 
+#'  information on the the value of lambda or if numerical problems occur
+#' @param eps_initial float; initial value of epsilon (probability of the
+#'   lineages remain undetected) used by the numerical algorithm.  It should only be adjusted if there is prior 
+#'  information on the the value of lambda or if numerical problems occur.
+#'
+#' @return the function returns a list of values as follows:
+#'         1) the MLE of the probability of lineages remaining undetected (epsilon) - this output is omitted if option model="OM" is specified;
+#'         2) the MLE of the MOI parameter (lambda);
+#'         3) the MLE of the average MOI (psi);
+#'         4) the MLE of the lineage frequencies;
+#'         5) the inverse Fisher information (estimates for the parameter epsilon are omitted if option model="OM" is specified).
+#'
+#' @examples MLE_IDM(40, 1, c(23,27), 1, 0.1)
 MLE <- function(N, N_k, n_0=0, model = "IDM", lambda_initial = 1, eps_initial=0.1){
+  eps <- 1e-12
+  n <- length(N_k)
+  if(!is.numeric(N)){
+    warning("Argument N must be an interge valued float")
+  }else if(!is.numeric(N_k)){
+    warning("Argument N_k must be an interge valued float vector")
+  }else if(!is.numeric(n_0)){
+    warning("Argument n_0 must be an interge valued float")
+  }else{
+    N1 <- floor(N)
+    N_k1 <- floor(N_k)
+    n_01 <- floor(n_0)
+    if(N-N1>eps){
+      warning(paste("Argument N must be an interge valued float, it was changed to N=", N1,sep=""))
+      N <- N1
+    }else if(sum(N_k-N_k1)>eps){
+      warning(paste("2- Argument N_k must be an interge valued float, it was changed to N_k=", N_k1,sep=""))
+      N_k <- N_k1
+    }else if(n_0 - n_01 >eps){
+      warning(paste("Argument n_0 must be an interge valued float, it was changed to n_0=", n_01,sep=""))
+      n_0 <- n_01
+    }
+    if(n_0 <0 || min(N_k)< 0 || N<0 || min(N-N_k)<0 || n_0>min(N-N_k) || (sum(N_k) <N && is.element(model,c("OM"))) || (sum(N_k) + n_0 <N  )){
+      warning("The data does not satisfiy the requirements, N, N_k, n_0 must be natural numbers, max(N_k)<N, and n_0 <= min(N-N_k), n_0+N1,+ .. + N_n >= N")
+    }else{
+      if(n==1){
+        final <- list(n_0/N,NA,NA,1,NA,NA)
+        names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+        if(is.element(model,c("OM"))){
+          final <- list(NA,NA,1,NA,NA)
+          names(final) <- c("MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+        }
+        final
+      }else{
+        if(is.element(model,c("OM"))){
+          N <- N-n_0
+          n_0 <-0
+        }
+        if(n_0==0){
+          if(sum(N_k)==N){
+            final <- list(0,0,1,N_k/N,NA,NA)
+            names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+            if(is.element(model,c("OM"))){
+              final <- list(0,1,N_k/N,NA,NA)
+              names(final) <- c( "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+            }
+            final
+          }else if(min(N-N_k)==0){
+            final <- list(0,Inf,Inf,NA,NA,NA)
+            names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+            if(is.element(model,c("OM"))){
+              final <- list(Inf,Inf,NA,NA,NA)
+              names(final) <- c("MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+            }
+            final
+          }else{
+           
+            final <- MLE1(N, N_k, n_0, model, lambda_initial, eps_initial)
+            final
+          }
+        }else{ #n_0>0
+          if(prod(1-N_k/N)<=n_0/N){
+            final <- list(min(1-N_k/N),Inf,Inf,NA,NA,NA)
+            names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+            if(is.element(model,c("OM"))){
+               final <- list(Inf,Inf,NA,NA,NA)
+               names(final) <- c("MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+            }
+            final
+          }else if(prod(1-N_k/N)>n_0/N){
+            if(sum(N_k)==N-n_0){
+              final <- list(n_0/N,0,1,NA,NA,NA)
+              names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+#              if(is.element(model,c("OM"))){
+#                final <- list(0,1,N_k/N,NA,NA)
+#                names(final) <- c( "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+#              }
+              final
+            }else{
+               final <- MLE1(N, N_k, n_0, model, lambda_initial, eps_initial)
+               final
+            }
+          }
+        }
+      }
+    }
+  }
+}  
+
+
+#---------------------------------internal function-------------------------------
+
+MLE1 <- function(N, N_k, n_0=0, model = "IDM", lambda_initial = 1, eps_initial=0.1){
   if(model == "OM"){
-    print(n_0)
+    if(n_0>0){
+      print(paste("Option model= `OM' neglects n_0=",n_0," samples and adjusts sample size to N=",N-n_0,sep=""))
+    }
     MLE_OM(N-n_0,N_k,lambda_initial)
   }else if(model == "IDM"){
+    if(n_0>0){
       MLE_IDM(N, N_k,n_0,lambda_initial, eps_initial)
+    }else{
+      inp <- MLE_OM(N-n_0,N_k,lambda_initial)
+      FI <- inp[[4]]
+      n <- length(inp[[3]])
+      FInf <- array(NA,c(n+2,n+2))
+      pick <- c(TRUE,FALSE,rep(TRUE,n))
+      #print(pick)
+      FInf[pick,pick] <- inp[[4]]
+      nam <-c("lam","eps",paste("p",1:n,sep="."))
+      colnames(FInf) <- nam
+      rownames(FInf) <- nam
+      
+      lam <- inp[[2]]
+      el <- exp(lam)
+      adj <- el*(el-lam-1)/(el-1)^2
+      FInfadj <- FInf
+      FInfadj[1,] <- FInf[1,]*adj
+      FInfadj[,1] <-  FInf[,1]*adj
+      nam <-c("psi","eps",paste("p",1:n,sep="."))
+      colnames(FInfadj) <- nam
+      rownames(FInfadj) <- nam
+
+      final <- list(0,inp[[1]],inp[[2]],inp[[3]],FInf,FInfadj)
+      names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
+      final
+    }
+        
   }else{
-    Warning("option model needs to be eiter `IDM' or `OM'")
+    warning("option model needs to be eiter `IDM' or `OM'")
   }
 }    
 
@@ -69,27 +209,29 @@ MLE <- function(N, N_k, n_0=0, model = "IDM", lambda_initial = 1, eps_initial=0.
 
 #' The EM algorithm to derive the MLE for the IDM
 #'
-#' @param N integer; Sample size
-#' @param N0 integer; number of empty records
-#' @param Nk vector of integers;each component corresponds to the number of
+#' @param N integer-valued float; Sample size
+#' @param n0 integer-valued float; number of empty records
+#' @param Nk float vector integer valued;each component corresponds to the number of
 #'   times a lineage is found in the dataset
 #' @param lambda_initial float; initial value of lambda
-#' @param eps_initial float; inital value of epsilon (probability of the
+#' @param eps_initial float; initial value of epsilon (probability of the
 #'   lineages remain undetected)
 #'
 #' @return the function returns a list of values as follows:
-#'         1) the MLE of the probability of lineages remaining undetected (epsilon)
-#'         2) the MLE of the MOI parameter (lambda)
-#'         3) the MLE of the average MOI (psi)
-#'         4) the MLE of the lineage frequencies
+#'         1) the MLE of the probability of lineages remaining undetected (epsilon);
+#'         2) the MLE of the MOI parameter (lambda);
+#'         3) the MLE of the average MOI (psi);
+#'         4) the MLE of the lineage frequencies;
+#'         5) the inverse Fisher information evaluated at the LME.
 #'
-#' @examples EM(40, 1, c(23,27), 1, 0.1)
+#' @examples MLE_IDM(40, 1, c(23,27), 1, 0.1)
 MLE_IDM <- function(N, Nk,n0, lambda_initial, eps_initial) {
   thr1 <- 10^-8
   thr2 <- 10^-12
   thr3 <- 10^-20
   z <- Nk
-  Nk <- Nk[Nk!=0]
+  sel <- Nk!=0
+  Nk <- Nk[sel]
   n <- length(Nk)
   Nnk <- N - Nk
   snk <- sum(Nk)
@@ -116,8 +258,32 @@ MLE_IDM <- function(N, Nk,n0, lambda_initial, eps_initial) {
   pnextz <- array(0,length(z))  
   pnextz[z > 0] <- pnext 
   psi <- lamnext/(1-exp(-lamnext))
-  final <- list(epsnext, lamnext, psi, pnextz)
-  #names(final) <- c("")
+  pp <- array(0,length(sel))
+
+  pick <-c( TRUE,epsnext>0, sel)
+  FI <- FI(N,lamnext,pnext,epsnext)
+  pick <-c( TRUE,TRUE, sel)
+  n <- length(sel)
+  FInf <- array(NA,c(n+2,n+2))
+  FInf[pick,pick] <- FI
+  nam <-c("lam","eps",paste("p",1:n,sep="."))
+  colnames(FInf) <- nam
+  rownames(FInf) <- nam
+
+  
+  
+  lam <- lamnext
+  el <- exp(lam)
+  adj <- el*(el-lam-1)/(el-1)^2
+  FInfadj <- FInf
+  FInfadj[1,] <- FInf[1,]*adj
+  FInfadj[,1] <-  FInf[,1]*adj
+  nam <-c("psi","eps",paste("p",1:n,sep="."))
+  colnames(FInfadj) <- nam
+  rownames(FInfadj) <- nam
+
+  final <- list(epsnext, lamnext, psi, pnextz,FInf,FInfadj)
+  names(final) <- c("probability of lineages remain undetected", "MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
   final
 }
 
@@ -137,6 +303,7 @@ EM_lambda_Newton <- function(initial, N, thr, ntt) {
 }
 
 #---------------------------------internal function-------------------------------
+
 
 EM_next_iteration <- function (lamnext, pkt, epst, N, N0, Nk, Nnk, snk) {
   #prereuisite
@@ -165,6 +332,137 @@ EM_next_iteration <- function (lamnext, pkt, epst, N, N0, Nk, Nnk, snk) {
   list(pnext, epsnext, wt)
 }
 
+
+#---------------------------------internal function-------------------------------
+
+#' The EM algorithm to derive the MLE for the IDM
+#'
+#' @param N integer-valued ; Sample size
+#' @param lam float; MOI parameter
+#' @param p float vector; vector of lineage frequencies
+#' @param eps float; probability of the lineages remain undetected, default eps=0
+#'
+#' @return the inverse Fisher information matrix
+#'
+#' @examples FI(100, 1.1, c(0.5,0.45,0.05), 0.1)
+#' 
+FI <- function (N,lam,p,eps=0) {
+  #prerequisite
+  n <-length(p)
+  if(eps==0){
+    FI <- array(0,c(n+2,n+2))
+    iFI <- array(0,c(n+2,n+2))
+    el <- exp(lam)
+    eml <-1/el
+    elk <- exp(lam*p)
+    eplkmo <- (elk-1)
+    
+    
+    ## d^2L/dl^2
+    FI[1,1] <- -1/(1-eml)+el*sum( p^2/eplkmo)
+    
+    ## d^2L/dldpk
+    
+    FI[1,1:n+2] <- - el*(1- p/eplkmo*lam )
+    FI[1:n+2,1] <- FI[1,1:n+2]
+    
+    ## d^2L/dpk^2
+    
+    D <- (el*lam^2/eplkmo)
+    #FI <- FI + diag(c(0,0,D ))
+    
+    FI <- N/(el-1)*FI
+    FI[1:n+2,2] <- 1
+    FI[2,1:n+2] <- FI[1:n+2,2] 
+    
+     ## use blockwise inverision
+    D <- N/(el-1)*D
+    D1 <- 1/D
+    d <- -sum(D1)
+    D2 <- c(-1,D1)
+    D3 <- (D2%*%t(D2))/d + diag(c(0,D1))
+    
+    A0 <-FI[1,1]
+    B <- FI[1,2:(n+2)]
+    A1 <- FI[1:n+2,1:n+2]
+    DC <- D3 %*% B
+    A1 <- solve(A0 - (B %*% DC))
+    
+    iFI[1,1] <- A1
+    C2 <-  -DC %*% A1 
+    iFI[0:n+2,1] <- C2
+    B2 <- t(C2)
+    iFI[1,0:n+2] <- B2
+    iFI[0:n+2,0:n+2] <- D3 - DC %*% B2 
+    iFI <- iFI[-2,-2]
+    
+  }else{
+    FI <- array(0,c(n+3,n+3))
+    iFI <- array(0,c(n+3,n+3))
+    el <- exp(lam)
+    eml <-1/el
+    elk <- exp(lam*p)
+    Ak <- (elk-1)*eps +1
+    tau <- prod(Ak)
+    tau <- tau/(tau-1)
+    pkAk <- t(p/Ak)
+    eplkmo <- (elk-1)
+    eplmoAl <- t(eplkmo/Ak)
+    Tl <- eps * p * elk /Ak
+    Te <- eplkmo/Ak
+    Tp <- eps*lam*elk/Ak
+    ## d^2L/dl^2
+    FI[1,1] <- -1/(1-eml)+(1-eps)*el*(pkAk%*% (p/eplkmo)) + tau*sum(Tl)^2
+    
+    ## d^2L/dlde
+    FI[1,2] <- -el*sum(pkAk)  + tau * sum(Tl)*sum(Te)
+    FI[2,1] <- FI[1,2]
+    
+    ## d^2L/dldpk
+    
+    FI[1,1:n+3] <- - el*( 1- pkAk/eplkmo*lam*(1-eps) ) + tau * Tp *sum(Tl)
+    FI[1:n+3,1] <- FI[1,1:n+3]
+    
+    ## d^2L/deps^2
+    
+    FI[2,2] <- el*sum(eplmoAl)/(1-eps)  + tau*sum(Te)^2
+    
+    ## d^2L/depsdpk
+    
+    FI[2,1:n+3] <- - el*lam/Ak  + tau*sum(Te) * Tp
+    FI[1:n+3,2] <- FI[2,1:n+3]
+
+    ## d^2L/dpk^2
+    
+    D <- (el*(1-eps)*lam^2/Ak/eplkmo + tau *  Tp^2)
+    FI <- FI + diag(c(0,0,0,D ))
+    
+    ## use blockwise inverision
+    FI <- N/(el-1)*FI
+    
+    D <- N/(el-1)*D
+    D1 <- 1/D
+    d <- -sum(D1)
+    D2 <- c(-1,D1)
+    D3 <- (D2%*%t(D2))/d + diag(c(0,D1))
+    
+    A0 <-FI[1:2,1:2]
+    B <- FI[1:2,3:(n+3)]
+    A1 <- FI[1:n+3,1:n+3]
+    DC <- D3 %*% t(B)
+    A1 <- solve(A0 - (B %*% DC))
+    
+    iFI[1:2,1:2] <- A1
+    C2 <- - DC %*% A1 
+    iFI[0:n+3,1:2] <- C2
+    B2 <- t(C2)
+    iFI[1:2,0:n+3] <- B2
+    iFI[0:n+3,0:n+3] <- D3 - DC %*% B2 
+    iFI <- iFI[-3,-3]
+  }
+  iFI
+}
+
 ################################ The MLE of the OM #################################
 
 #' function to derive the MLE for the original model
@@ -179,7 +477,7 @@ EM_next_iteration <- function (lamnext, pkt, epst, N, N0, Nk, Nnk, snk) {
 #'   the lineage frequencies
 #' @export
 #'
-#' @examples MLE(c(22,25,49,32,18),97)
+#' @examples MLE(97,c(22,25,49,32,18))
 MLE_OM <- function(N,Nk,la=1){
   sel <- Nk
   Nk <- sel[sel>0]
@@ -217,13 +515,36 @@ MLE_OM <- function(N,Nk,la=1){
     }        
   }
   pk <- -1/l1*log(1-nk*(1-exp(-l1))) 
-  pk1 <- array(0,length(sel))  
-  pk1[sel>0] <- pk  
+  n <- length(sel)
+  pk1 <- array(0,n)
+  pick <- sel>0
+  pk1[pick] <- pk  
   psi <- l1/(1-exp(-l1))
-  out <- list(l1,psi,pk1)
-  names(out) <- c("MOI parameter lambda","average MOI","lineage frequencies")
+  
+  FI <- FI(N,l1,pk,0)
+  pick <-c( TRUE, pick)
+  FInf <- array(NA,c(n+1,n+1))
+  FInf[pick,pick] <- FI
+  nam <-c("lam",paste("p",1:n,sep="."))
+  colnames(FInf) <- nam
+  rownames(FInf) <- nam
+  
+  lam <- l1
+  el <- exp(lam)
+  adj <- el*(el-lam-1)/(el-1)^2
+  FInfadj <- FInf
+  FInfadj[1,] <- FInf[1,]*adj
+  FInfadj[,1] <-  FInf[,1]*adj
+  nam <-c("psi",paste("p",1:n,sep="."))
+  colnames(FInfadj) <- nam
+  rownames(FInfadj) <- nam
+
+  
+  out <- list(l1,psi,pk1,FInf,FInfadj)
+  names(out) <- c("MOI parameter lambda","average MOI","lineage frequencies","inverse Fisher information","inverse Fisher information adjusted for average MOI")
   out	
 }
+
 
 ########################################################################################
 #------------------------- Functions for the simulation study --------------------------
@@ -294,14 +615,20 @@ mnom <- function(M, p){
   out
 }
 
+
 ####################################### runsim #########################################
 
 #' Generates a molecular dataset with incomplete information 
 #'
 #' @param data matrix; a 0-1 matrix corresponding to N blood samples 
 #' @param eps float; the probability of lineages remaining undetected
+#' @param N integer; sample size
+#' @param n integer; number of lineages
 #'
-#' @return dataset with incomplete information
+#' @return a list with the following values:
+#'            1) number of empty records
+#'            2) the vector of observed prevalences
+#'            3) dataset with incomplete information
 #'
 #' @examples
 IncompleteData <- function(data, eps){
@@ -311,4 +638,3 @@ IncompleteData <- function(data, eps){
   ran <- matrix((ran > eps)*1, N, n)
   ran*data
 }
-
